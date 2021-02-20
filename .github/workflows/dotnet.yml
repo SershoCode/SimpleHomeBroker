@@ -1,0 +1,70 @@
+name: .NET
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  Deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v1
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: '5.0.x'
+    - name: Run Tests
+      run: dotnet test -r linux-musl-x64 -c Release
+    - name: Publish
+      run: dotnet publish -r linux-musl-x64 -c Release -o deploy
+    - name: Stop
+      continue-on-error: true
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.HOST }}
+        port: ${{ secrets.PORT }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{secrets.KEY}}
+        script: pkill -f SimpleHomeBroker
+    - name: Copy
+      uses: appleboy/scp-action@master
+      with:
+        host: ${{ secrets.HOST }}
+        port: ${{ secrets.PORT }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{secrets.KEY}}
+        source: '/home/runner/work/SimpleHomeBroker/SimpleHomeBroker/deploy'
+        target: '~/apps/SimpleHomeBroker'
+        rm: true
+        strip_components: 3
+    - name: Start
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.HOST }}
+        port: ${{ secrets.PORT }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{secrets.KEY}}
+        script: |
+         export PATH=$PATH:$HOME/.dotnet
+         cd ~/apps/SimpleHomeBroker
+         echo '${{ secrets.APPSETTINGS }}' > appsettings.json
+         nohup dotnet SimpleHomeBroker.Host.dll > /dev/null 2>&1 &
+    - name: Notify
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_TO }}
+        token: ${{ secrets.TELEGRAM_TOKEN }}
+        format: markdown
+        args: '`SimpleHomeBroker 👌`'
+
+# Wait for Microsoft fix -r
+# - name: Restore
+#   run: dotnet restore -r linux-musl-x64
+# - name: Build
+#   run: dotnet build -r linux-musl-x64 -c Release --no-restore
+# - name: Run Tests
+#   run: dotnet test -r linux-musl-x64 -c Release --no-build --no-restore
+# - name: Publish
+#   run: dotnet publish -r linux-musl-x64 -c Release -o deploy --no-build --no-restore

@@ -1,0 +1,113 @@
+# fly -t server set-pipeline --pipeline simple-home-broker -c .\pipeline.yml
+
+resource_types:
+- name: telegram-notification
+  type: docker-image
+  source:
+    repository: w32blaster/concourse-telegram-notifier
+    tag: latest
+
+resources:
+- name: source-code
+  type: git
+  icon: github
+  source:
+    uri: git@github.com:SershoCode/SimpleHomeBroker.git
+    branch: main
+    private_key: ((github.ssh-key))
+
+- name: registry
+  type: registry-image
+  icon: cloud-upload
+  source:
+    repository: ((registry.url))/simplehomebroker
+    username: ((registry.user))
+    password: ((registry.pass))
+
+- name: telegram-notification
+  type: telegram-notification
+  icon: bell
+  source:
+    bot_token: ((telegram.token))
+
+jobs:
+- name: build-and-deploy
+  plan:
+    - get: source-code
+      trigger: true
+      on_failure:
+        put: telegram-notification
+        params:
+          chat_id: ((telegram.admin))
+          text: <b>🔴 SimpleHomeBroker (build $BUILD_NAME)</b><code> • Download source code failed</code>
+          parse_mode: HTML
+
+    - task: add-appsettings-from-vault
+      config:
+        platform: linux
+        image_resource:
+          type: registry-image
+          source: { repository: busybox }
+        inputs:
+        - name: source-code
+        outputs:
+        - name: combined-code
+        run:
+          path: sh
+          args:
+          - -exc
+          - |
+            rm -f source-code/src/SimpleHomeBroker.Host/appsettings.json
+            echo '((appsettings.json))' > source-code/src/SimpleHomeBroker.Host/appsettings.json
+            cp -R source-code/. combined-code/
+      on_failure:
+        put: telegram-notification
+        params:
+          chat_id: ((telegram.admin))
+          text: <b>🔴 SimpleHomeBroker (build $BUILD_NAME)</b><code> • Combine source code with appsettings failed</code>
+          parse_mode: HTML
+
+    - task: build-and-push
+      privileged: true
+      config:
+        platform: linux
+        image_resource:
+          type: registry-image
+          source:
+            repository: vito/oci-build-task
+        inputs:
+        - name: combined-code
+        outputs:
+        - name: image
+        run:
+          path: build
+        params:
+          CONTEXT: combined-code/
+      on_success:
+        put: telegram-notification
+        params:
+          chat_id: ((telegram.admin))
+          text: <b>🟢 SimpleHomeBroker (build $BUILD_NAME)</b><code> • Build success</code>
+          parse_mode: HTML
+      on_failure:
+        put: telegram-notification
+        params:
+          chat_id: ((telegram.admin))
+          text: <b>🔴 SimpleHomeBroker (build $BUILD_NAME)</b><code> • Build failed. Tests?</code>
+          parse_mode: HTML
+
+    - put: registry
+      params:
+        image: image/image.tar
+      on_success:
+        put: telegram-notification
+        params:
+          chat_id: ((telegram.admin))
+          text: <b>🟢 SimpleHomeBroker (build $BUILD_NAME)</b><code> • Push to registry success</code>
+          parse_mode: HTML
+      on_failure:
+        put: telegram-notification
+        params:
+          chat_id: ((telegram.admin))
+          text: <b>🔴 SimpleHomeBroker (build $BUILD_NAME)</b><code> • Push to registry failed. Registry is down?</code>
+          parse_mode: HTML
